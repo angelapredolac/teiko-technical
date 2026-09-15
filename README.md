@@ -3,7 +3,7 @@
 SQLite data pipeline and interactive Streamlit dashboard for the Loblaw Bio trial exercise. Covers sample cell frequencies, responder comparisons, and baseline cohort summaries.
 
 **Repository:** [angelapredolac/teiko-technical](https://github.com/angelapredolac/teiko-technical)
-**Dashboard:** [Run locally](http://localhost:8501) using the commands below. Public deployment is pending.
+**Dashboard:** [Open the interactive dashboard](https://teiko-technical-k9wcpy8ah6gqvvwcswxqcr.streamlit.app/)
 
 ## Quick start
 
