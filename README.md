@@ -1,169 +1,125 @@
 # Immune cell response analysis
 
-A reproducible SQLite and Python pipeline with an interactive Streamlit dashboard for the Loblaw Bio trial exercise.
+SQLite data pipeline and interactive Streamlit dashboard for the Loblaw Bio trial exercise. Covers sample cell frequencies, responder comparisons, and baseline cohort summaries.
 
 **Repository:** [angelapredolac/teiko-technical](https://github.com/angelapredolac/teiko-technical)
+**Dashboard:** [Run locally](http://localhost:8501) using the commands below. Public deployment is pending.
 
-**Dashboard:** [Local dashboard](http://localhost:8501) after `make dashboard`. In Codespaces, open forwarded port **8501** from the **Ports** panel. A public dashboard URL is pending deployment; see the publishing instructions below.
+## Quick start
 
-## 1. Run in GitHub Codespaces
-
-From the repository's **Code → Codespaces → Create codespace** menu, create a workspace. The supplied dev container uses Python 3.11 and automatically runs setup and the pipeline. To reproduce those steps manually from the repository root:
+In GitHub, select **Code → Codespaces → Create codespace**. The dev container uses Python 3.11 and runs setup and the pipeline automatically. To run manually from the repository root:
 
 ```bash
-make setup
-make pipeline
-make dashboard
+make setup      # Create .venv and install dependencies
+make pipeline   # Load SQLite, run Parts 2–4, and export reports
+make dashboard  # Start Streamlit on port 8501
 ```
 
-- `make setup` creates `.venv` and installs pinned dependencies.
-- `make pipeline` sequentially loads the source CSV into `cell_counts.db`, runs all analyses, and writes reports to `outputs/`.
-- `make dashboard` starts Streamlit on port 8501 and reads the database created by the pipeline. Stop it with Ctrl+C.
+In Codespaces, open **Ports → 8501 → Open in Browser**. Locally, visit [localhost:8501](http://localhost:8501). Stop the server with Ctrl+C. Local setup requires Python 3.11–3.13 and Make; only dependency installation needs internet access.
 
-Python 3.11–3.13 is supported. On a local machine, Python and Make must be installed. Setup requires internet access; the pipeline itself does not. All file paths are resolved relative to the repository, so there is no dependency on the original Downloads folder.
-
-The required standalone loader also works without third-party dependencies:
+The required standalone loader also runs without arguments or third-party dependencies:
 
 ```bash
 python load_data.py
 ```
 
-It creates `cell_counts.db` in the repository root without arguments. The input `cell-count.csv` is included in the repository.
+It reads the included `cell-count.csv` and creates `cell_counts.db` in the repository root. Rerunning it rebuilds the database without duplicating rows.
 
-## 2. Database design
-
-```mermaid
-erDiagram
-    projects ||--o{ subjects : contains
-    subjects ||--o{ samples : contributes
-    samples ||--|{ cell_counts : measures
-    populations ||--o{ cell_counts : identifies
-```
-
-| Table | Key | Stored information |
-| --- | --- | --- |
-| `projects` | `project` | Project identifiers |
-| `subjects` | `subject` | Project, condition, age, sex, treatment, response |
-| `samples` | `sample` | Subject, sample type, treatment-relative time |
-| `populations` | `population` | Five measured population names |
-| `cell_counts` | `(sample, population)` | Nonnegative integer cell count |
-| `provenance` | One row per database build | Source filename, SHA-256, source row count |
-
-This separates subject attributes from repeated visits and avoids a new count column whenever a population is added. The loader currently enforces the exercise's five-population CSV format. Subject IDs are assumed globally unique; inconsistent attributes, including project membership, are rejected instead of merged. Age is stored as supplied at subject level because it is constant across the provided visits.
-
-Foreign keys, primary keys, category checks and nonnegative counts enforce relational integrity. Indexes support subject joins and cohort selection. Blank response is stored as SQL `NULL`, never as non-response. Unknown response subjects remain available in the database.
-
-The loader validates every row, rejects duplicates, fractional/negative counts, missing required fields, inconsistent subject metadata, empty files and zero-total samples. It builds a temporary database and atomically replaces the previous file only on success. Reruns do not append duplicates. A zero-total percentage is undefined; the SQL view also uses `NULLIF` defensively.
-
-### Part 2: sample frequencies
-
-The `sample_frequencies` SQL view returns precisely:
+## Project structure
 
 ```text
-sample | total_count | population | count | percentage
+.
+├── load_data.py                     # Part 1: validate CSV and build SQLite database
+├── schema.sql                       # Tables, constraints, indexes, and analysis views
+├── analysis.py                      # Parts 2–4: queries, statistics, and report exports
+├── app.py                           # Interactive Streamlit dashboard
+├── cloud_app.py                     # Cloud entry point; initializes data on first launch
+├── cell-count.csv                   # Input data
+├── cell_counts.db                   # Generated by load_data.py
+├── Makefile                         # setup, pipeline, dashboard, test, lint
+├── requirements.txt                 # Pinned direct dependencies
+├── pyproject.toml                   # Test and lint configuration
+├── README.md
+├── tests/test_pipeline.py           # Data, statistics, and dashboard tests
+├── .devcontainer/devcontainer.json  # Codespaces configuration
+├── .github/workflows/ci.yml         # Automated checks on pushes and pull requests
+├── .streamlit/config.toml           # Dashboard theme
+├── .gitignore                      # Exclude environments and generated files
+└── outputs/                        # Generated by make pipeline
+    ├── sample_frequencies.csv
+    ├── statistics_all_timepoints.csv
+    ├── statistics_baseline.csv
+    ├── subject_frequencies_all_timepoints.csv
+    ├── subject_frequencies_baseline.csv
+    ├── response_boxplots.html       # Interactive boxplots; works offline
+    ├── baseline_samples.csv
+    ├── baseline_projects.csv
+    ├── baseline_response.csv
+    ├── baseline_sex.csv
+    └── results.md                  # Statistical report
 ```
 
-For each sample, `total_count = SUM(count)` across the five populations and `percentage = 100.0 * count / total_count`. Stored counts remain the source of truth; percentages are computed rather than redundantly stored. Percentages sum to approximately 100% per sample, subject to floating-point precision.
+The database, reports, and virtual environment are generated locally and excluded from Git.
 
-### Part 4: baseline subset
+## Database design
 
-`baseline_samples` applies all four filters in SQL:
+`projects` contains `subjects`; each subject contributes `samples`. `cell_counts` stores one count per `(sample, population)`, referencing the `populations` table. This avoids repeating subject metadata and supports additional populations without adding count columns. The CSV loader currently expects the five populations supplied in the exercise.
 
-```sql
-WHERE condition = 'melanoma'
-  AND treatment = 'miraclib'
-  AND sample_type = 'PBMC'
-  AND time_from_treatment_start = 0
+Primary and foreign keys enforce relationships; indexes support cohort filtering and subject joins. Subject IDs are treated as globally unique. The loader rejects conflicting subject metadata, duplicate samples, missing required values, invalid counts, and zero-total samples. Blank responses become SQL `NULL`. A temporary database replaces the existing file only after a successful build; `provenance` records the source filename, SHA-256, and row count.
+
+## Analysis and dashboard
+
+### Part 2: sample overview
+
+The `sample_frequencies` SQL view produces **sample, total_count, population, count, percentage**, where:
+
+```text
+percentage = 100 × population count / sum of the five population counts
 ```
 
-Project summaries use `COUNT(*)` for **samples**. Response and sex summaries use `COUNT(DISTINCT subject)` for **subjects**, so additional baseline samples do not inflate patient counts.
+The dashboard provides project filters, sample search, and CSV downloads. The supplied data produces 52,500 sample–population rows from 10,500 samples.
 
-## 3. Statistical approach
+### Part 3: response comparison
 
-Part 3 includes melanoma patients receiving miraclib, PBMC samples only, and known `yes`/`no` response. All five populations are analyzed.
+The cohort includes **melanoma + miraclib + PBMC**, with known yes/no response: 331 responders and 325 non-responders.
 
-1. The required boxplots show sample relative frequencies by response for every population. The dashboard can also plot subject means.
-2. Each subject has repeated samples. The primary comparison averages each population's percentages within each subject across available visits, then compares independent subjects with a **two-sided Mann–Whitney U test** (asymptotic tie correction and continuity correction).
-3. **Holm correction** controls the family-wise error rate across the five population tests at 0.05 and allows dependent tests. Significance means adjusted p < 0.05.
-4. Report group sizes, medians, median differences in percentage points, U statistics, raw/adjusted p-values and **rank-biserial correlation**. Positive correlation indicates larger responder frequencies. A distributional test does not generally test medians alone.
-5. A separate exploratory **baseline-only** comparison addresses potential pretreatment predictors. Correction is applied separately within each window; searching both windows adds multiplicity beyond one family.
+- Boxplots display all five populations by response, using individual samples or subject means.
+- Tests use one mean percentage per subject across visits, so repeated samples do not count as independent patients.
+- Two-sided **Mann–Whitney U** tests use asymptotic, tie-corrected p-values with continuity correction. **Holm correction** controls the family-wise error rate across five populations at 0.05.
+- Reports include group sizes, medians, differences in percentage points, raw/adjusted p-values, and rank-biserial effect sizes. Positive effects indicate higher responder frequencies.
+- A separate baseline-only comparison explores potential pretreatment predictors; multiplicity correction is applied separately within each analysis window.
 
-Subjects with fewer visits still receive equal weight, but their means summarize different available time windows. The supplied data has visits at 0, 7 and 14 for every subject. Groups with fewer than two subjects are marked untestable. No predictive model is claimed.
+**Finding:** No population meets adjusted p < 0.05 in either window. CD4 T cells have the smallest all-timepoint raw p-value (0.0124), but adjusted p = 0.0621. Exact results are in `outputs/results.md`.
 
-### Interpretation limits
+**Limits:** These are exploratory associations, not validated predictors or causal drug effects. The test compares distributions, not necessarily medians alone. Percentages are dependent, confounders are unadjusted, and averaging visits does not model time trends. Looking across both windows adds multiplicity; no significance does not establish equivalence.
 
-These are exploratory associations, not evidence that the drug caused a change. Post-treatment measurements could reflect response rather than predict it. Cell fractions are compositional: a higher fraction can result from another population decreasing. Project, age, sex and other confounders are not adjusted for. A future prediction study would use baseline features, split data by subject, evaluate on held-out subjects and consider project effects. A longitudinal model would be needed to estimate response-specific trajectories.
+### Part 4: baseline cohort
 
-References: [SciPy Mann–Whitney U documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.mannwhitneyu.html); [Holm's original sequential correction paper](https://www.jstor.org/stable/4615733).
+SQL selects **melanoma + miraclib + PBMC + time_from_treatment_start = 0**. Project counts use samples; response and sex counts use distinct subjects.
 
-## 4. Outputs and dashboard
+| Summary | Results |
+| --- | --- |
+| Baseline cohort | 656 samples / 656 subjects |
+| Samples by project | prj1: 384; prj3: 272 |
+| Subjects by response | Responders: 331; non-responders: 325 |
+| Subjects by sex | Male: 344; female: 312 |
 
-`make pipeline` creates:
+Matching samples and summaries are downloadable from the dashboard. Projects with no matching samples are omitted.
 
-- `cell_counts.db`: all source rows as relational data, views and provenance.
-- `outputs/sample_frequencies.csv`: all 52,500 sample–population rows.
-- `outputs/statistics_all_timepoints.csv` and `statistics_baseline.csv`: statistical evidence.
-- `outputs/subject_frequencies_*.csv`: the observations used by each statistical comparison.
-- `outputs/response_boxplots.html`: standalone interactive boxplots, including Plotly for offline viewing.
-- `outputs/baseline_*.csv`: matching samples and all three requested summaries.
-- `outputs/results.md`: generated statistical report.
-
-Dashboard tabs cover the sample overview, response comparison, baseline cohort and methods. Tables are downloadable; overview filters allow project selection and sample search. Response comparison has explicit analysis-window and plotting-unit controls. Baseline summaries always represent the full requested cohort.
-
-For the supplied file, the baseline subset contains **656 samples / 656 subjects**:
-
-| Measure | Category | Count |
-| --- | --- | ---: |
-| Samples by project | prj1 | 384 |
-| Samples by project | prj3 | 272 |
-| Subjects by response | yes | 331 |
-| Subjects by response | no | 325 |
-| Subjects by sex | M | 344 |
-| Subjects by sex | F | 312 |
-
-Projects with no matching samples do not appear in grouped results.
-
-### Findings for the supplied data
-
-No population meets the Holm-adjusted p < 0.05 threshold in either analysis.
-For the all-timepoint subject means, CD4 T cells have the smallest raw p-value
-(0.0124), but the adjusted p-value is 0.0621. The responder median is 30.210%
-versus 29.823% in non-responders, a difference of 0.387 percentage points;
-rank-biserial correlation is 0.113. All baseline adjusted p-values are 1.0.
-Failure to detect significance does not establish equivalence between groups.
-Exact values are reproduced in `outputs/results.md`.
-
-## 5. Quality checks
+## Validation
 
 ```bash
 make lint
 make test
 ```
 
-Tests check independent percentage calculations, complete import, rerun behavior, database integrity, missing responses, failure preservation, invalid data, distinct-subject counting, known Holm values, subject weighting, effect direction and Streamlit interactions. GitHub Actions runs lint, the entire pipeline and tests in Python 3.11.
+Tests cover import completeness, independent percentage calculations, reruns, invalid-input handling, database integrity, distinct-subject counts, statistical adjustment, subject weighting, and dashboard interactions. GitHub Actions runs lint, the pipeline, and tests with Python 3.11.
 
-## 6. Publish the repository and dashboard
+## Public dashboard deployment
 
-Commit the source files, source CSV, configuration and tests. Generated databases, environments and reports are intentionally ignored; they are reproducible with `make pipeline`.
+1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io/).
+2. Select this repository, branch `main`, entry point **cloud_app.py**, and Python 3.11.
+3. Deploy and check each tab. The cloud entry point builds the database and reports when the database is absent.
+4. Add the deployed URL to the **Dashboard** link above before submitting.
 
-For an empty local repository without a remote:
-
-```bash
-git remote add origin https://github.com/angelapredolac/teiko-technical.git
-git add .
-git commit -m "Implement immune cell analysis pipeline and dashboard"
-git branch -M main
-git push -u origin main
-```
-
-If the remote already contains commits, fetch and reconcile them first; do not force-push. GitHub authentication may be required.
-
-To provide a persistent public dashboard link:
-
-1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io/) with your GitHub account.
-2. Create an app for `angelapredolac/teiko-technical`, select the published branch and **`cloud_app.py`** as the entry point, and select Python 3.11 in advanced settings.
-3. Deploy. The cloud entry point initializes the same database and analysis pipeline if no database exists, then displays `app.py`. Locally, `make dashboard` uses `app.py` directly and expects `make pipeline` to have run.
-4. Open the deployed app, check each tab, and replace the pending public dashboard notice at the top of this README with its actual URL.
-5. Submit the repository link after the public dashboard link is recorded.
-
-See [Streamlit's deployment instructions](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy). No public URL is claimed until deployment succeeds.
+References: [Mann–Whitney U](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.mannwhitneyu.html), [Holm correction](https://www.jstor.org/stable/4615733), [Streamlit deployment](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy).
