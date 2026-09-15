@@ -1,0 +1,7 @@
+pandas==2.2.3
+numpy==2.2.3
+scipy==1.15.2
+plotly==6.0.1
+streamlit==1.44.1
+pytest==8.3.5
+ruff==0.11.2
